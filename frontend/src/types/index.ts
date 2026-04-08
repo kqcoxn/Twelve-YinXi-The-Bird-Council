@@ -82,3 +82,39 @@ export interface UserProfile {
   resonant_seats: string[];
   common_issue_types: string[];
 }
+
+export interface SpeechRecord {
+  seat_id: string;
+  seat_name: string;
+  speech: string;
+  stance: string;
+  confidence: number;
+  round: number;
+}
+
+export interface DebateTranscript {
+  rounds: {
+    round_num: number;
+    speeches: SpeechRecord[];
+  }[];
+  total_speeches: number;
+  created_at: string;
+}
+
+export interface SeatPrevote {
+  seat_id: string;
+  stance: "approve" | "oppose" | "abstain";
+  confidence: number;
+  stress_hint: number;
+  risk_assessment: string;
+}
+
+// Extended CouncilResponse with transcript
+export interface FullCouncilResponse extends CouncilResponse {
+  transcript?: DebateTranscript;
+  views?: {
+    dramatic?: string;
+    practical?: string;
+    psychological?: string;
+  };
+}

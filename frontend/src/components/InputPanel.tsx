@@ -4,14 +4,25 @@ import { useCouncilStore } from "../stores/council";
 export default function InputPanel() {
   const [proposal, setProposal] = useState("");
   const [category, setCategory] = useState("");
-  const { submitProposal, isLoading, error } = useCouncilStore();
+  const { submitProposal, isLoading, error, clearError } = useCouncilStore();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!proposal.trim() || isLoading) return;
+    clearError();
     await submitProposal(proposal.trim(), category || undefined);
-    setProposal("");
-    setCategory("");
+    // Only clear form on success (handled by store)
+    if (!error) {
+      setProposal("");
+      setCategory("");
+    }
+  };
+
+  const handleRetry = () => {
+    clearError();
+    if (proposal.trim()) {
+      submitProposal(proposal.trim(), category || undefined);
+    }
   };
 
   return (
@@ -41,7 +52,22 @@ export default function InputPanel() {
           {isLoading ? "处理中..." : "提交议题"}
         </button>
       </form>
-      {error && <div className="error-msg">{error}</div>}
+
+      {isLoading && (
+        <div className="loading-indicator">
+          <div className="loading-spinner" />
+          <span>议会正在讨论中...</span>
+        </div>
+      )}
+
+      {error && (
+        <div className="error-msg">
+          <p>{error}</p>
+          <button className="retry-btn" onClick={handleRetry}>
+            重试
+          </button>
+        </div>
+      )}
     </div>
   );
 }

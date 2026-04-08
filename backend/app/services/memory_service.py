@@ -170,6 +170,20 @@ class MemoryService:
             for row in rows
         ]
 
+    # Memory context building
+    async def build_context(
+        self, user_id: str, user_input: str, top_k: int = 3
+    ) -> dict:
+        """Build memory context for deliberation."""
+        user_profile = await self.get_user_profile(user_id)
+        similar_cases = await self.search_similar_cases(user_id, user_input, top_k)
+
+        return {
+            "user_profile": user_profile,
+            "similar_cases": similar_cases,
+            "seat_memories": {},
+        }
+
     # Memory write strategy
     async def should_write_memory(self, event_type: str, intensity: float) -> bool:
         """Decide whether to write to long-term memory."""

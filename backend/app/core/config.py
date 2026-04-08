@@ -10,10 +10,12 @@ class Settings(BaseSettings):
     FAST_MODEL_API_KEY: str = ""
     FAST_MODEL_ENDPOINT: str = "https://api.openai.com/v1"
     FAST_MODEL_NAME: str = "gpt-3.5-turbo"
+    FAST_MODEL_PROVIDER: str = "openai"  # LiteLLM provider prefix
 
     STRONG_MODEL_API_KEY: str = ""
     STRONG_MODEL_ENDPOINT: str = "https://api.openai.com/v1"
     STRONG_MODEL_NAME: str = "gpt-4"
+    STRONG_MODEL_PROVIDER: str = "openai"  # LiteLLM provider prefix
 
     # Server Configuration
     HOST: str = "127.0.0.1"
@@ -46,7 +48,8 @@ class Settings(BaseSettings):
         return self.DATABASE_URL or f"sqlite:///./{self.DB_PATH}"
 
     class Config:
-        env_file = ".env"
+        # Look for .env file in the backend directory
+        env_file = Path(__file__).parent.parent.parent / ".env"
         env_file_encoding = "utf-8"
         case_sensitive = False
 

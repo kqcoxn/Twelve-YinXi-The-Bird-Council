@@ -4,6 +4,7 @@ import type {
   SeatConfig,
   SeatState,
   CouncilState,
+  FullCouncilResponse,
 } from "../types";
 
 const API_BASE = "/api/v1";
@@ -16,7 +17,7 @@ export interface ProposalRequest {
 export async function submitProposal(
   proposal: string,
   category?: string,
-): Promise<CouncilState> {
+): Promise<FullCouncilResponse> {
   const response = await fetch(`${API_BASE}/council/submit`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -30,7 +31,8 @@ export async function submitProposal(
   });
 
   if (!response.ok) {
-    throw new Error(`API error: ${response.status}`);
+    const errorText = await response.text();
+    throw new Error(`API error: ${response.status} - ${errorText}`);
   }
 
   return response.json();
@@ -65,6 +67,7 @@ export async function getUserProfile(): Promise<UserProfile> {
 export async function healthCheck(): Promise<{
   status: string;
   version: string;
+  llm_configured: boolean;
 }> {
   const response = await fetch(`${API_BASE}/health`);
   if (!response.ok) throw new Error(`API error: ${response.status}`);

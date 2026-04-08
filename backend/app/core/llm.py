@@ -8,39 +8,84 @@ from ..core.config import settings
 class LLMClient:
     """LLM client with retry logic and mock mode support."""
 
-    def __init__(self, api_key: str, endpoint: str, model: str):
-        self.api_key = api_key
-        self.endpoint = endpoint
-        self.model = model
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        endpoint: Optional[str] = None,
+        model: Optional[str] = None,
+    ):
+        self.api_key = api_key or settings.FAST_MODEL_API_KEY
+        self.endpoint = endpoint or settings.FAST_MODEL_ENDPOINT
+        self.model = model or settings.FAST_MODEL_NAME
         self.client = (
-            AsyncOpenAI(api_key=api_key, base_url=endpoint) if api_key else None
+            AsyncOpenAI(api_key=self.api_key, base_url=self.endpoint)
+            if self.api_key
+            else None
+        )
+        self.is_mock = settings.MOCK_LLM or not self.api_key
+
+    async def call_fast(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float = 0.7,
+        max_tokens: int = 1000,
+    ) -> str:
+        """Call fast model."""
+        if self.is_mock:
+            return await self._mock_generate(user_prompt, system_prompt)
+
+        return await self._generate(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            model=settings.FAST_MODEL_NAME,
         )
 
-    async def generate(
+    async def call_strong(
         self,
-        prompt: str,
-        system_prompt: Optional[str] = None,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float = 0.7,
+        max_tokens: int = 2000,
+    ) -> str:
+        """Call strong model."""
+        if self.is_mock:
+            return await self._mock_generate(user_prompt, system_prompt)
+
+        return await self._generate(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            model=settings.STRONG_MODEL_NAME,
+        )
+
+    async def _generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float,
+        max_tokens: int,
+        model: str,
         max_retries: int = 3,
-        backoff_factor: float = 2.0,
-        **kwargs,
     ) -> str:
         """Generate text with retry logic."""
-        if settings.MOCK_LLM:
-            return await self._mock_generate(prompt, system_prompt)
-
         for attempt in range(max_retries):
             try:
-                messages = []
-                if system_prompt:
-                    messages.append({"role": "system", "content": system_prompt})
-                messages.append({"role": "user", "content": prompt})
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ]
 
                 response = await acompletion(
-                    model=self.model,
+                    model=f"{settings.FAST_MODEL_PROVIDER}/{model}",
                     messages=messages,
                     api_key=self.api_key,
                     api_base=self.endpoint,
-                    **kwargs,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
                 )
 
                 return response.choices[0].message.content
@@ -48,7 +93,7 @@ class LLMClient:
             except Exception as e:
                 if attempt == max_retries - 1:
                     raise
-                wait_time = backoff_factor**attempt
+                wait_time = 2.0**attempt
                 print(
                     f"[WARN] LLM call failed (attempt {attempt + 1}/{max_retries}): {e}"
                 )
@@ -61,30 +106,15 @@ class LLMClient:
         self, prompt: str, system_prompt: Optional[str] = None
     ) -> str:
         """Mock response for development/testing."""
-        await asyncio.sleep(0.5)  # Simulate latency
+        await asyncio.sleep(0.3)  # Simulate latency
 
-        # Simple mock: detect intent and return appropriate response
-        if "反对" in prompt or "oppose" in prompt.lower():
-            return "我反对这个提议。我们需要更多的证据和讨论。"
-        elif "赞成" in prompt or "approve" in prompt.lower():
-            return "我赞成这个提议。这看起来是一个合理的方案。"
-        else:
-            return "我已经收到了你的提议,让我思考一下..."
+        # Return a simple mock response
+        return "我已经思考了你的议题。这是一个复杂的问题,需要综合考虑多方面因素。"
 
 
-# Fast model client (for pre-votes, quick responses)
-fast_client = LLMClient(
-    api_key=settings.FAST_MODEL_API_KEY,
-    endpoint=settings.FAST_MODEL_ENDPOINT,
-    model=settings.FAST_MODEL_NAME,
-)
-
-# Strong model client (for debates, summaries)
-strong_client = LLMClient(
-    api_key=settings.STRONG_MODEL_API_KEY,
-    endpoint=settings.STRONG_MODEL_ENDPOINT,
-    model=settings.STRONG_MODEL_NAME,
-)
+# Pre-configured clients
+fast_client = LLMClient()
+strong_client = LLMClient()
 
 
 async def call_llm_with_retry(
@@ -96,4 +126,15 @@ async def call_llm_with_retry(
 ) -> str:
     """Convenience function for LLM calls with retry."""
     client = fast_client if model == "fast" else strong_client
-    return await client.generate(prompt, system_prompt, max_retries, **kwargs)
+    if client.is_mock:
+        return await client._mock_generate(prompt, system_prompt)
+    return await client._generate(
+        system_prompt=system_prompt or "",
+        user_prompt=prompt,
+        temperature=0.7,
+        max_tokens=1000,
+        model=(
+            settings.FAST_MODEL_NAME if model == "fast" else settings.STRONG_MODEL_NAME
+        ),
+        max_retries=max_retries,
+    )

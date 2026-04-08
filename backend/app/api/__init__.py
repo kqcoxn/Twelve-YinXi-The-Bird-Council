@@ -3,6 +3,7 @@
 from fastapi import APIRouter
 from datetime import datetime
 import uuid
+import logging
 
 from ..models.api import (
     SubmitProposalRequest,
@@ -19,9 +20,40 @@ from ..models.council import (
 from ..models.seat import SeatState, SeatStance
 from ..models.personas import load_all_seats, get_seat_config
 from ..services.memory_service import memory_service
+from ..services.knife_engine import KnifeEngine
+from ..services.bell_engine import BellEngine
 from ..core.config import settings
+from ..core.llm import LLMClient
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Lazy-initialized components
+_orchestrator = None
+_llm_client = None
+
+
+def get_orchestrator():
+    """Get or create orchestrator instance (lazy initialization)."""
+    global _orchestrator, _llm_client
+
+    if _orchestrator is None:
+        _llm_client = LLMClient()
+        knife_engine = KnifeEngine()
+        bell_engine = BellEngine()
+
+        from ..agents.orchestrator import CouncilOrchestrator
+
+        _orchestrator = CouncilOrchestrator(
+            llm_client=_llm_client,
+            memory_service=memory_service,
+            knife_engine=knife_engine,
+            bell_engine=bell_engine,
+        )
+        logger.info("CouncilOrchestrator initialized")
+
+    return _orchestrator
 
 
 @router.post("/council/submit")
@@ -31,27 +63,47 @@ async def submit_proposal(request: SubmitProposalRequest):
     session = await memory_service.create_session(request.session_id, request.user_id)
     session.current_proposal = request.user_input
 
-    # Load all seats
-    all_seats = load_all_seats()
+    try:
+        # Get orchestrator and process
+        orchestrator = get_orchestrator()
+        response = await orchestrator.process_input(
+            user_id=request.user_id,
+            session_id=request.session_id,
+            user_input=request.user_input,
+        )
 
-    # For MVP: return a simplified response
-    # Full implementation would trigger orchestrator flow
-    return CouncilResponse(
-        session_id=request.session_id,
-        mode="light_chat",
-        conclusion=CouncilConclusion(
-            summary=f"收到提案: {request.user_input}",
-            decision="delay",
-            main_reasons=["系统初始化中"],
-            risks=[],
-            next_steps=["配置 LLM API Key 后启用完整议会功能"],
-        ),
-        council_state=CouncilState(
-            mode=CouncilMode.LIGHT_CHAT,
-            visible_seats=[s.seat_id for s in all_seats[:12]],
-            hidden_seats=[s.seat_id for s in all_seats[12:]],
-        ),
-    )
+        # Update session with result
+        await memory_service.update_session(
+            request.session_id,
+            {
+                "current_proposal": request.user_input,
+                "conclusion": response.conclusion.summary,
+            },
+        )
+
+        return response
+
+    except Exception as e:
+        logger.error(f"Failed to process proposal: {e}", exc_info=True)
+
+        # Fallback response
+        all_seats = load_all_seats()
+        return CouncilResponse(
+            session_id=request.session_id,
+            mode="light_chat",
+            conclusion=CouncilConclusion(
+                summary=f"很抱歉，处理提案时遇到了错误：{str(e)}",
+                decision="delay",
+                main_reasons=["系统错误"],
+                risks=[str(e)],
+                next_steps=["请稍后重试"],
+            ),
+            council_state=CouncilState(
+                mode=CouncilMode.LIGHT_CHAT,
+                visible_seats=[s.seat_id for s in all_seats[:12]],
+                hidden_seats=[s.seat_id for s in all_seats[12:]],
+            ),
+        )
 
 
 @router.get("/council/session/{session_id}")
@@ -121,4 +173,10 @@ async def get_user_profile(user_id: str = "default_user"):
 @router.get("/health")
 async def health_check():
     """Health check endpoint."""
-    return {"status": "ok", "timestamp": datetime.now().isoformat(), "version": "0.1.0"}
+    llm_configured = bool(settings.FAST_MODEL_API_KEY and settings.FAST_MODEL_ENDPOINT)
+    return {
+        "status": "ok",
+        "timestamp": datetime.now().isoformat(),
+        "version": "0.1.0",
+        "llm_configured": llm_configured,
+    }

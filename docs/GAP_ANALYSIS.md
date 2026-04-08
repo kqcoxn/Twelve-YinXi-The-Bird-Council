@@ -1,0 +1,295 @@
+# 项目完成度报告 - 规划 vs 实现
+
+> 生成时间: 2026-04-09 (第二次更新)
+> 评估范围: 完整项目代码库 vs 规划文档 (PRD.md, TDD.md)
+> 总体完成度: **~65%** (从 25% 提升)
+
+---
+
+## 执行摘要
+
+项目已完成**核心业务逻辑开发**，从"有壳无核"升级为"内核完整，外壳待美化"。
+
+**最新进展**：
+- ✅ 完整的 10 步议会流程已实现 (Orchestrator + 6 个 Agent 模块)
+- ✅ 23 席人格驱动的 LLM 调用系统已就绪
+- ✅ 多轮辩论引擎、安全层、多视图渲染器全部完成
+- ✅ API 端点已替换 Mock，连接真实业务逻辑
+- ✅ 前端已完成类型对齐、辩论记录展示、席位详情等核心交互
+- ⚠️ WebSocket 实时推送、风铃动画、高级可视化仍待实现
+
+---
+
+## 一、已完成模块
+
+### 1.1 完全实现 (100%)
+
+| 模块 | 文件 | 说明 |
+|------|------|------|
+| 项目配置 | `main.py`, `.env`, `requirements.txt` | 一键启动、依赖管理 |
+| 配置系统 | `backend/app/core/config.py` | 环境变量、LLM 配置 |
+| 数据库初始化 | `backend/app/core/database.py` | 4 张表、索引、自动备份 |
+| API 框架 | `backend/app/main.py` | FastAPI、CORS、生命周期 |
+| 数据模型 | `models/seat.py, council.py, bell.py, knife.py, memory.py, api.py` | 完整 Pydantic 模型 |
+| 23 席人格 | `backend/app/data/personas.json` | 全部 23 席配置 |
+| **Orchestrator 编排系统** | `backend/app/agents/orchestrator.py` | **10 步工作流状态机** |
+| **Perceiver 感知层** | `backend/app/agents/perceiver.py` | **意图识别、情绪分析、风险检测** |
+| **Planner 决策系统** | `backend/app/agents/planner.py` | **议会模式选择、流程规划** |
+| **Seat Agent 席位代理** | `backend/app/agents/seat_agent.py` | **每席独立 Agent、预判+辩论发言** |
+| **Debate Engine 辩论引擎** | `backend/app/agents/debate_engine.py` | **多轮辩论编排、发言顺序管理** |
+| **Narrative Renderer 渲染器** | `backend/app/agents/renderer.py` | **三视图输出：戏剧/实用/心理** |
+| **Safety Layer 安全层** | `backend/app/agents/safety_layer.py` | **高风险输入检测、安全响应** |
+| **Prompt 模板系统** | `backend/app/agents/prompts.py` | **所有 LLM 交互模板** |
+| **辩论记录组件** | `frontend/src/components/DebateTranscript.tsx` | **按轮次展示辩论发言** |
+| **席位详情组件** | `frontend/src/components/SeatDetail.tsx` | **人格配置、状态、特质展示** |
+
+### 1.2 部分实现 (框架完整，缺高级功能)
+
+| 模块 | 完成度 | 已有 | 缺失 |
+|------|--------|------|------|
+| LLM 客户端 | 85% | 双模型客户端、重试机制、Mock 模式、便捷方法 | 流式响应、Token 计数 |
+| Bell Engine | 70% | 压力计算规则、碎裂判定 | 与 LLM 反馈的动态调整 |
+| Memory Service | 65% | 会话缓存、CRUD 接口、上下文构建 | 向量检索、Memory Curator Agent |
+| Knife Engine | 80% | 加权算法、风险接口、实际切分逻辑 | 高级风险调整 |
+| API 路由 | 85% | 6 个端点已连接真实逻辑 | WebSocket 端点 |
+| 前端框架 | 75% | React+TS+Zustand、完整交互、多视图切换 | 动画效果、高级可视化 |
+
+---
+
+## 二、未实现模块（待完善）
+
+### 2.1 P1 - 影响功能完整性
+
+| 模块 | 规划 | 现状 | 影响 |
+|------|------|------|------|
+| **WebSocket 推送** | 实时事件流 | 无实现 | 无法实时显示辩论过程 |
+| **流式响应** | 打字机效果 | 无实现 | 用户体验较生硬 |
+| **Memory Curator** | 记忆压缩/摘要 | 无实现 | 长期记忆质量下降 |
+| **复议触发机制** | 自动/手动复议 | 无实现 | 无法重新审议 |
+| **席位质询功能** | 席位间互相质疑 | 无实现 | 辩论互动性不足 |
+
+### 2.2 P2 - 影响用户体验
+
+| 模块 | 规划 | 现状 | 影响 |
+|------|------|------|------|
+| **风铃动画** | 实时压力动画 | 静态指标 | 视觉冲击力不足 |
+| **23 席圆形布局** | 会场布局、状态动画 | 网格布局 | 沉浸感不足 |
+| **投票过程动画** | 投票实时展示 | 静态结果 | 过程感不足 |
+| **Token 计数** | 显示消耗量 | 无实现 | 成本不透明 |
+| **会话历史** | 查看过往议题 | 无实现 | 无法回顾历史 |
+
+---
+
+## 三、数据流实现状态图
+
+```
+用户输入
+  ↓ ✅ Perceiver (意图识别) - 已实现，LLM+关键词兜底
+  ↓ ✅ Planner (流程规划) - 已实现，规则优先
+  ↓ ✅ Orchestrator (状态机编排) - 已实现，10 步完整流程
+  ↓ ✅ 23 席预判 (SeatAgent + LLM) - 已实现，并行调用
+  ↓ ✅ 分层餐刀 (Knife Engine) - 已实现，加权切分
+  ↓ ✅ 12 席辩论 (DebateEngine) - 已实现，多轮编排
+  ↓ ✅ 投票评估 (Vote Tally) - 已实现，自动统计
+  ↓ ✅ 结论生成 (Conclude) - 已实现，LLM 总结
+  ↓ ✅ 多视图输出 (Renderer) - 已实现，三种视角
+  ↓ ✅ 记忆写入 (Archive) - 已实现，SQLite 存储
+```
+
+---
+
+## 四、API 端点实现状态
+
+| 端点 | 状态 | 返回内容 |
+|------|------|----------|
+| `POST /council/submit` | **真实** | 完整议会流程结果 (含 transcript、conclusion、views) |
+| `GET /council/session/{id}` | **真实** | 会话状态 |
+| `GET /seats` | **真实** | 23 席配置列表 |
+| `GET /seats/{id}/state` | Mock | 初始化状态 (可改进) |
+| `GET /user/profile` | **真实** | 用户档案 |
+| `GET /health` | **真实** | 健康状态 (含 LLM 配置状态) |
+| `POST /council/reconsider` | 未实现 | - |
+| `POST /council/supplement` | 未实现 | - |
+| `POST /council/ask-seat` | 未实现 | - |
+| `WS /ws/council/{id}` | 未实现 | - |
+
+---
+
+## 五、按功能模块完成度
+
+| 功能 | 需求等级 | 进度 | 可用性 |
+|------|----------|------|--------|
+| **议会基础流程** | P0 | **95%** | **可用** |
+| **席位 Agent** | P0 | **95%** | **可用** |
+| **辩论引擎** | P0 | **90%** | **可用** |
+| **Perceiver** | P0 | **95%** | **可用** |
+| **Knife Engine** | P1 | **80%** | **可用** |
+| **Planner** | P1 | **90%** | **可用** |
+| **Narrative Renderer** | P1 | **90%** | **可用** |
+| **Safety Layer** | P1 | **95%** | **可用** |
+| **Memory 服务** | P2 | **65%** | 降级可用 |
+| **前端交互** | P2 | **75%** | **可用** |
+| **多视图输出** | P2 | **90%** | **可用** |
+| **WebSocket** | P1 | 0% | 不可用 |
+| **动画效果** | P2 | 10% | 不可用 |
+
+---
+
+## 六、可运行度评估
+
+| 场景 | 当前状态 | 备注 |
+|------|----------|------|
+| 启动服务 | 可运行 | `python main.py` |
+| 访问 API 文档 | 可运行 | `/docs` |
+| 查询席位列表 | 真实数据 | `GET /seats` |
+| 健康检查 | 真实数据 | `GET /health` (含 LLM 状态) |
+| **提交议题** | **真实数据** | **完整 10 步流程** |
+| **查看辩论记录** | **真实数据** | **DebateTranscript 组件** |
+| **获得决策** | **真实数据** | **LLM 生成结论** |
+| **多视图切换** | **真实数据** | **戏剧/实用/心理** |
+| **席位详情** | **真实数据** | **点击席位查看** |
+| 实时推送 | 不可用 | 无 WebSocket |
+| 动画效果 | 不可用 | 静态展示 |
+
+---
+
+## 七、后端新增模块详情
+
+### 7.1 Agent 模块架构 (`backend/app/agents/`)
+
+```
+agents/
+├── __init__.py           # 模块导出
+├── prompts.py            # Prompt 模板系统 (6 类模板)
+├── perceiver.py          # 意图识别 + 情绪分析 + 风险检测
+├── planner.py            # 议会模式选择 + 流程规划
+├── seat_agent.py         # 每席独立 Agent (预判 + 辩论发言)
+├── debate_engine.py      # 多轮辩论编排 + 发言顺序管理
+├── orchestrator.py       # 核心：10 步工作流状态机
+├── renderer.py           # 三视图输出 (戏剧/实用/心理)
+└── safety_layer.py       # 高风险输入检测 + 安全响应
+```
+
+### 7.2 Orchestrator 工作流
+
+```
+IDLE → PERCEIVING → RETRIEVING → PLANNING → [分支]
+  ├─ light_chat: 快速响应 → RENDER → OUTPUT
+  └─ full_council: PREVOTING_23 → KNIFE_CUTTING → DEBATING_12 
+                  → VOTING → EVALUATING → CONCLUDING 
+                  → RENDERING → OUTPUT
+```
+
+### 7.3 关键技术决策
+
+| 决策 | 选择 | 原因 |
+|------|------|------|
+| LLM 响应格式 | JSON + Pydantic 校验 | 结构化输出，免费验证 |
+| 辩论执行 | 串行调用 | 每轮发言依赖上下文 |
+| 预判执行 | 并行 (asyncio.gather) | 独立调用，节省 20 倍时间 |
+| Planner | 规则优先 (MVP) | 避免额外 LLM 调用，确定性 |
+| 错误降级 | Mock 兜底 | 系统永不崩溃 |
+| WebSocket | 暂不实现 | MVP 用轮询即可，后续实现 |
+
+---
+
+## 八、前端新增模块详情
+
+### 8.1 新增组件
+
+| 组件 | 路径 | 功能 |
+|------|------|------|
+| DebateTranscript | `frontend/src/components/DebateTranscript.tsx` | 按轮次展示辩论发言，按立场着色 |
+| SeatDetail | `frontend/src/components/SeatDetail.tsx` | 席位详情弹窗 (人格/状态/特质/语录) |
+
+### 8.2 增强组件
+
+| 组件 | 增强内容 |
+|------|----------|
+| CouncilHall | 辩论记录展示、多视图切换、结论详情、加载进度 |
+| InputPanel | 错误处理、重试机制、加载状态 |
+| SeatVisualization | 点击查看详情、状态颜色更新 |
+| VoteVisualization | 对齐后端 VoteMap 结构 |
+
+### 8.3 状态管理增强
+
+```typescript
+// council store 新增字段
+{
+  transcript: DebateTranscript | null;  // 辩论记录
+  views: { dramatic?, practical?, psychological? };  // 多视图
+  loadingStep: string;  // 加载进度提示
+}
+```
+
+---
+
+## 九、后续开发建议（优先级排序）
+
+### Phase 2: 实时体验 (当前优先级)
+
+1. **WebSocket 实时推送** - 辩论过程实时推送到前端
+2. **流式响应** - 打字机效果的发言展示
+3. **风铃动画** - 实时压力可视化动画
+4. **会话历史** - 查看和回顾过往议题
+
+### Phase 3: 功能完善
+
+5. 复议触发机制
+6. 席位质询功能
+7. Token 计数展示
+8. Memory Curator Agent
+9. 高级风险调整
+
+### Phase 4: 视觉升级
+
+10. 23 席圆形布局动画
+11. 投票过程动画
+12. 整体动效优化
+13. 响应式布局完善
+
+### Phase 5: 生产就绪
+
+14. 完整测试用例
+15. 性能优化
+16. 日志系统完善
+17. 错误监控
+
+---
+
+## 十、核心改进总结
+
+### 从"有壳无核"到"内核完整"
+
+**新增代码量**：
+- 后端：9 个新文件，~1500 行核心业务逻辑
+- 前端：2 个新组件 + 5 个文件增强，~800 行
+- 总计：~2300 行新增代码
+
+**关键突破**：
+- ✅ 10 步工作流从规划变为可执行代码
+- ✅ 23 席人格真正驱动 LLM 生成个性化发言
+- ✅ 多轮辩论引擎支持上下文依赖的串行发言
+- ✅ 安全层保障高风险输入的妥善处理
+- ✅ 三视图输出提供差异化的决策视角
+
+### 当前可运行的 vs 规划可运行的
+
+- **可运行**: 服务启动、查询信息、**提交议题获得真实决策**、**看到辩论记录**、**多视图切换**、**席位详情查看**
+- **不可运行**: 实时推送辩论过程、流式打字机效果、高级动画、会话历史
+
+---
+
+## 十一、风险项
+
+| 风险 | 影响 | 建议 |
+|------|------|------|
+| 无 WebSocket | 无法实时看到辩论过程 | Phase 2 最优先 |
+| 无流式响应 | 用户体验较生硬 | Phase 2 实现 |
+| LLM API 未配置 | 降级到 Mock 模式 | 配置 .env 中的 API Key |
+| 向量搜索未安装 | 记忆检索质量下降 | 安装 sentence-transformers |
+| 前端动画缺失 | 视觉冲击力不足 | Phase 4 优化 |
+
+---
+
+_本报告基于代码实现与规划文档的对比分析生成，反映 2026-04-09 的最新开发进度。_
