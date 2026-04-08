@@ -1,9 +1,10 @@
 """API routes."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from datetime import datetime
 import uuid
 import logging
+import asyncio
 
 from ..models.api import (
     SubmitProposalRequest,
@@ -22,6 +23,7 @@ from ..models.personas import load_all_seats, get_seat_config
 from ..services.memory_service import memory_service
 from ..services.knife_engine import KnifeEngine
 from ..services.bell_engine import BellEngine
+from ..services.websocket_manager import websocket_manager
 from ..core.config import settings
 from ..core.llm import LLMClient
 
@@ -180,3 +182,116 @@ async def health_check():
         "version": "0.1.0",
         "llm_configured": llm_configured,
     }
+
+
+@router.get("/council/history")
+async def get_council_history(
+    user_id: str = "default_user", limit: int = 20, offset: int = 0
+):
+    """Get council session history for a user."""
+    import aiosqlite
+    from ..core.config import settings
+
+    async with aiosqlite.connect(str(settings.DB_PATH)) as db:
+        cursor = await db.execute(
+            """SELECT case_id, proposal_title, conclusion, minority_opinion, 
+                      triggered_reconsider, triggered_fracture, created_at
+               FROM cases 
+               WHERE user_id = ?
+               ORDER BY created_at DESC
+               LIMIT ? OFFSET ?""",
+            (user_id, limit, offset),
+        )
+        rows = await cursor.fetchall()
+
+    # Get total count
+    cursor = await db.execute(
+        "SELECT COUNT(*) FROM cases WHERE user_id = ?", (user_id,)
+    )
+    total_count = await cursor.fetchone()
+
+    return {
+        "sessions": [
+            {
+                "case_id": row[0],
+                "proposal_title": row[1],
+                "conclusion": row[2],
+                "minority_opinion": row[3],
+                "triggered_reconsider": row[4],
+                "triggered_fracture": row[5],
+                "created_at": row[6],
+            }
+            for row in rows
+        ],
+        "pagination": {
+            "total": total_count[0],
+            "limit": limit,
+            "offset": offset,
+            "has_more": total_count[0] > offset + limit,
+        },
+    }
+
+
+@router.get("/ws/sessions")
+async def list_active_sessions():
+    """List active WebSocket sessions."""
+    return {
+        "active_sessions": websocket_manager.get_active_sessions(),
+        "total": len(websocket_manager.get_active_sessions()),
+    }
+
+
+@router.websocket("/ws/council/{session_id}")
+async def council_websocket(websocket: WebSocket, session_id: str):
+    """WebSocket endpoint for real-time council events."""
+    await websocket_manager.connect(websocket, session_id)
+
+    try:
+        # Send connection confirmation
+        await websocket.send_json(
+            {
+                "type": "connected",
+                "payload": {
+                    "session_id": session_id,
+                    "message": "已连接到议会实时推送",
+                    "timestamp": datetime.now().isoformat(),
+                },
+            }
+        )
+
+        # Keep connection alive and handle client messages
+        while True:
+            try:
+                # Wait for messages from client (with timeout)
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+
+                # Handle client messages (e.g., ping/pong, commands)
+                import json
+
+                try:
+                    message = json.loads(data)
+                    if message.get("type") == "ping":
+                        await websocket.send_json(
+                            {
+                                "type": "pong",
+                                "payload": {"timestamp": datetime.now().isoformat()},
+                            }
+                        )
+                except json.JSONDecodeError:
+                    pass  # Ignore invalid messages
+
+            except asyncio.TimeoutError:
+                # Send keepalive ping
+                await websocket.send_json(
+                    {
+                        "type": "ping",
+                        "payload": {"timestamp": datetime.now().isoformat()},
+                    }
+                )
+
+    except WebSocketDisconnect:
+        logger.info(f"Client disconnected from session {session_id}")
+    except Exception as e:
+        logger.error(f"WebSocket error for session {session_id}: {e}")
+    finally:
+        websocket_manager.disconnect(websocket)

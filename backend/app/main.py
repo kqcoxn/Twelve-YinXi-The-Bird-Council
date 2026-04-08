@@ -76,8 +76,10 @@ def create_app() -> FastAPI:
 
     # Include API routes
     from .api import router
+    from .api.sse import router as sse_router
 
     app.include_router(router, prefix="/api/v1")
+    app.include_router(sse_router, prefix="/api/v1")
 
     # Serve frontend static files if they exist
     frontend_dist = Path(__file__).parent.parent.parent / "frontend-dist"

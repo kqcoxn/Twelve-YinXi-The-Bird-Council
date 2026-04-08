@@ -14,6 +14,7 @@ from ..models.memory import (
     CaseRecord,
     MemoryContext,
 )
+from .vector_search import vector_search, HAS_VECTOR_SEARCH
 
 
 class MemoryService:
@@ -23,6 +24,7 @@ class MemoryService:
         # Session memory: in-memory cache with TTL
         self._session_cache: dict[str, SessionMemory] = {}
         self._session_cache_ttl = TTLCache(maxsize=100, ttl=settings.SESSION_TTL)
+        self._vector_search_enabled = HAS_VECTOR_SEARCH
 
     # Session Memory (volatile)
     async def create_session(self, session_id: str, user_id: str) -> SessionMemory:
@@ -138,7 +140,27 @@ class MemoryService:
     async def search_similar_cases(
         self, user_id: str, query: str, top_k: int = 5
     ) -> list[CaseSummary]:
-        """Search for similar cases (simple text match, auto-degrade from vector)."""
+        """Search for similar cases using vector search with text fallback."""
+        # Use vector search if available and enabled
+        if self._vector_search_enabled and vector_search.model is not None:
+            try:
+                vector_results = await vector_search.search_similar_cases(
+                    user_id, query, top_k
+                )
+                return [
+                    CaseSummary(
+                        case_id=r["case_id"],
+                        proposal_title=r["proposal_title"],
+                        conclusion=r.get("conclusion", ""),
+                        minority_opinion=None,
+                        created_at=datetime.now(),
+                    )
+                    for r in vector_results
+                ]
+            except Exception as e:
+                print(f"[WARN] Vector search failed: {e}, falling back to text search")
+
+        # Fallback to text-based search
         keywords = query.split()
 
         async with aiosqlite.connect(str(settings.DB_PATH)) as db:

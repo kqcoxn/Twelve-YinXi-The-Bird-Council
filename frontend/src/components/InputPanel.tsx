@@ -4,13 +4,28 @@ import { useCouncilStore } from "../stores/council";
 export default function InputPanel() {
   const [proposal, setProposal] = useState("");
   const [category, setCategory] = useState("");
-  const { submitProposal, isLoading, error, clearError } = useCouncilStore();
+  const { submitProposal, isLoading, error, clearError, connectWebSocket } =
+    useCouncilStore();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!proposal.trim() || isLoading) return;
     clearError();
+
+    // Generate a session ID
+    const sessionId = `session_${Date.now()}`;
+
+    // Connect to WebSocket for real-time updates
+    try {
+      await connectWebSocket(sessionId);
+    } catch (err) {
+      console.warn(
+        "[InputPanel] WebSocket connection failed, continuing without real-time updates",
+      );
+    }
+
     await submitProposal(proposal.trim(), category || undefined);
+
     // Only clear form on success (handled by store)
     if (!error) {
       setProposal("");

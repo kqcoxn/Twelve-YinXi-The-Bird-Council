@@ -73,3 +73,33 @@ export async function healthCheck(): Promise<{
   if (!response.ok) throw new Error(`API error: ${response.status}`);
   return response.json();
 }
+
+export interface CouncilHistoryResponse {
+  sessions: Array<{
+    case_id: string;
+    proposal_title: string;
+    conclusion: string | null;
+    minority_opinion: string | null;
+    triggered_reconsider: boolean;
+    triggered_fracture: boolean;
+    created_at: string;
+  }>;
+  pagination: {
+    total: number;
+    limit: number;
+    offset: number;
+    has_more: boolean;
+  };
+}
+
+export async function getCouncilHistory(
+  userId: string = "default_user",
+  limit: number = 20,
+  offset: number = 0,
+): Promise<CouncilHistoryResponse> {
+  const response = await fetch(
+    `${API_BASE}/council/history?user_id=${userId}&limit=${limit}&offset=${offset}`,
+  );
+  if (!response.ok) throw new Error(`API error: ${response.status}`);
+  return response.json();
+}

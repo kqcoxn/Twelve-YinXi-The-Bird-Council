@@ -27,6 +27,7 @@ from ..models.personas import load_all_seats
 from ..services.memory_service import MemoryService
 from ..services.knife_engine import KnifeEngine
 from ..services.bell_engine import BellEngine
+from ..services.websocket_manager import websocket_manager
 
 from .perceiver import Perceiver
 from .planner import Planner
@@ -88,11 +89,39 @@ class CouncilOrchestrator:
         conclusion: CouncilConclusion | None = None
 
         try:
+            # Send start event
+            await websocket_manager.send_to_session(
+                session_id,
+                {
+                    "type": "council_started",
+                    "payload": {
+                        "session_id": session_id,
+                        "timestamp": datetime.now().isoformat(),
+                    },
+                },
+            )
+
             # Step 1: PERCEIVE
             council_state.orchestrator_state = OrchestratorState.PERCEIVING
+            await websocket_manager.send_to_session(
+                session_id,
+                {
+                    "type": "step_started",
+                    "payload": {"step": "perceiving", "message": "感知用户意图..."},
+                },
+            )
+
             perception = await self.perceiver.perceive(user_input)
             logger.info(
                 f"Perception: task_type={perception.task_type}, risks={perception.risk_flags}"
+            )
+
+            await websocket_manager.send_to_session(
+                session_id,
+                {
+                    "type": "step_completed",
+                    "payload": {"step": "perceiving", "result": perception.dict()},
+                },
             )
 
             # Safety check
@@ -115,6 +144,15 @@ class CouncilOrchestrator:
                     next_steps=["建议寻求专业帮助"],
                     minority_opinion="",
                 )
+
+                await websocket_manager.send_to_session(
+                    session_id,
+                    {
+                        "type": "safety_mode",
+                        "payload": {"message": "检测到安全风险，已切换到安全模式"},
+                    },
+                )
+
                 return CouncilResponse(
                     session_id=session_id,
                     mode="safety_mode",
@@ -124,6 +162,14 @@ class CouncilOrchestrator:
 
             # Step 2: RETRIEVE
             council_state.orchestrator_state = OrchestratorState.RETRIEVING
+            await websocket_manager.send_to_session(
+                session_id,
+                {
+                    "type": "step_started",
+                    "payload": {"step": "retrieving", "message": "检索历史记忆..."},
+                },
+            )
+
             user_profile = await self.memory.get_user_profile(user_id)
             memory_context = await self.memory.build_context(
                 user_id=user_id,
@@ -131,8 +177,24 @@ class CouncilOrchestrator:
             )
             logger.info(f"Retrieved user profile: {user_id}")
 
+            await websocket_manager.send_to_session(
+                session_id,
+                {
+                    "type": "step_completed",
+                    "payload": {"step": "retrieving"},
+                },
+            )
+
             # Step 3: PLAN
             council_state.orchestrator_state = OrchestratorState.PLANNING
+            await websocket_manager.send_to_session(
+                session_id,
+                {
+                    "type": "step_started",
+                    "payload": {"step": "planning", "message": "规划议会流程..."},
+                },
+            )
+
             flow_plan = self.planner.plan(perception, user_profile)
             council_state.mode = CouncilMode(flow_plan.mode)
             council_state.round = flow_plan.rounds
@@ -140,10 +202,28 @@ class CouncilOrchestrator:
                 f"Flow plan: mode={flow_plan.mode}, rounds={flow_plan.rounds}, knife={flow_plan.need_knife}"
             )
 
+            await websocket_manager.send_to_session(
+                session_id,
+                {
+                    "type": "step_completed",
+                    "payload": {
+                        "step": "planning",
+                        "result": {"mode": flow_plan.mode, "rounds": flow_plan.rounds},
+                    },
+                },
+            )
+
             # Branch based on mode
             if flow_plan.mode == "light_chat":
                 # Light chat: quick response
                 council_state.orchestrator_state = OrchestratorState.LIGHT_COUNCIL
+                await websocket_manager.send_to_session(
+                    session_id,
+                    {
+                        "type": "mode_changed",
+                        "payload": {"mode": "light_chat", "message": "快速响应模式"},
+                    },
+                )
                 conclusion = await self._generate_light_response(
                     user_input, perception, memory_context
                 )
@@ -159,6 +239,13 @@ class CouncilOrchestrator:
             else:
                 # Full council deliberation
                 council_state.orchestrator_state = OrchestratorState.FULL_COUNCIL
+                await websocket_manager.send_to_session(
+                    session_id,
+                    {
+                        "type": "mode_changed",
+                        "payload": {"mode": "full_council", "message": "完整议会模式"},
+                    },
+                )
                 conclusion, transcript, ui_commands, memory_updates = (
                     await self._run_full_council(
                         session_id, user_input, perception, flow_plan, council_state
@@ -168,6 +255,17 @@ class CouncilOrchestrator:
             # Step: RENDER (multi-view)
             council_state.orchestrator_state = OrchestratorState.RENDERING
             if conclusion and transcript:
+                await websocket_manager.send_to_session(
+                    session_id,
+                    {
+                        "type": "step_started",
+                        "payload": {
+                            "step": "rendering",
+                            "message": "生成多视图输出...",
+                        },
+                    },
+                )
+
                 views = await self.renderer.render_all(
                     conclusion, transcript, perception
                 )
@@ -178,14 +276,45 @@ class CouncilOrchestrator:
                     )
                 )
 
+                await websocket_manager.send_to_session(
+                    session_id,
+                    {
+                        "type": "views_ready",
+                        "payload": {"views": list(views.keys())},
+                    },
+                )
+
             # Step: ARCHIVE
             council_state.orchestrator_state = OrchestratorState.OUTPUT
+            await websocket_manager.send_to_session(
+                session_id,
+                {
+                    "type": "council_completed",
+                    "payload": {
+                        "session_id": session_id,
+                        "timestamp": datetime.now().isoformat(),
+                    },
+                },
+            )
+
             await self._archive_case(
                 user_id, session_id, user_input, conclusion, perception
             )
 
         except Exception as e:
             logger.error(f"Orchestrator error: {e}", exc_info=True)
+
+            await websocket_manager.send_to_session(
+                session_id,
+                {
+                    "type": "error",
+                    "payload": {
+                        "message": str(e),
+                        "timestamp": datetime.now().isoformat(),
+                    },
+                },
+            )
+
             conclusion = CouncilConclusion(
                 summary="很抱歉，议会系统遇到了一个技术问题。请稍后再试。",
                 decision="delay",
@@ -222,14 +351,41 @@ class CouncilOrchestrator:
 
         # Step 4: PREVOTE_23
         council_state.orchestrator_state = OrchestratorState.PREVOTING_23
+        await websocket_manager.send_to_session(
+            session_id,
+            {
+                "type": "step_started",
+                "payload": {"step": "prevoting_23", "message": "23席预判中..."},
+            },
+        )
+
         logger.info("Running 23-seat pre-vote...")
-        prevotes = await self._run_prevotes(self.all_seats, user_input)
+        prevotes = await self._run_prevotes(self.all_seats, user_input, session_id)
         council_state.knife_risk = 0.3  # Default risk
         logger.info(f"Pre-votes complete: {len(prevotes)} seats responded")
+
+        await websocket_manager.send_to_session(
+            session_id,
+            {
+                "type": "step_completed",
+                "payload": {
+                    "step": "prevoting_23",
+                    "result": {"seats_responded": len(prevotes)},
+                },
+            },
+        )
 
         # Step 5: KNIFE
         council_state.orchestrator_state = OrchestratorState.KNIFE_CUTTING
         if flow_plan.need_knife and len(prevotes) >= 12:
+            await websocket_manager.send_to_session(
+                session_id,
+                {
+                    "type": "step_started",
+                    "payload": {"step": "knife_cutting", "message": "餐刀切分中..."},
+                },
+            )
+
             knife_result = await self.knife_engine.execute_cut(
                 all_seats=self.all_seats,
                 prevotes=prevotes,
@@ -252,6 +408,19 @@ class CouncilOrchestrator:
             )
             logger.info(
                 f"Knife cut: {len(visible_ids)} visible, {len(hidden_ids)} hidden"
+            )
+
+            # Send knife cut event via WebSocket
+            await websocket_manager.send_to_session(
+                session_id,
+                {
+                    "type": "knife_cut",
+                    "payload": {
+                        "visible_seats": visible_ids,
+                        "hidden_seats": hidden_ids,
+                        "cut_risk": knife_result.cut_risk,
+                    },
+                },
             )
         else:
             # No knife, use first 12 seats
@@ -280,18 +449,54 @@ class CouncilOrchestrator:
             f"Starting debate with {len(visible_configs)} seats, {rounds} rounds..."
         )
 
+        await websocket_manager.send_to_session(
+            session_id,
+            {
+                "type": "step_started",
+                "payload": {
+                    "step": "debating_12",
+                    "message": f"12席辩论开始 ({rounds}轮)...",
+                },
+            },
+        )
+
         transcript, vote_map = await self.debate_engine.run_debate(
             visible_seat_configs=visible_configs,
             seat_states=visible_states,
             rounds=rounds,
             proposal=user_input,
+            session_id=session_id,  # Pass session_id for WebSocket events
         )
         council_state.vote_map = vote_map
         council_state.tension_level = min(1.0, transcript.total_speeches / 20.0)
         logger.info(f"Debate complete: {transcript.total_speeches} speeches")
 
+        await websocket_manager.send_to_session(
+            session_id,
+            {
+                "type": "step_completed",
+                "payload": {
+                    "step": "debating_12",
+                    "result": {"total_speeches": transcript.total_speeches},
+                },
+            },
+        )
+
         # Step 7: VOTE
         council_state.orchestrator_state = OrchestratorState.VOTING
+        await websocket_manager.send_to_session(
+            session_id,
+            {
+                "type": "vote_update",
+                "payload": {
+                    "vote_map": {
+                        "approve": vote_map.approve,
+                        "oppose": vote_map.oppose,
+                        "abstain": vote_map.abstain,
+                    }
+                },
+            },
+        )
         # Vote map already computed from debate
 
         # Step 8: EVALUATE
@@ -304,11 +509,29 @@ class CouncilOrchestrator:
 
         # Step 9: CONCLUDE
         council_state.orchestrator_state = OrchestratorState.CONCLUDING
+        await websocket_manager.send_to_session(
+            session_id,
+            {
+                "type": "step_started",
+                "payload": {"step": "concluding", "message": "生成结论中..."},
+            },
+        )
+
         conclusion = await self._generate_conclusion(user_input, transcript, vote_map)
+
+        await websocket_manager.send_to_session(
+            session_id,
+            {
+                "type": "conclusion",
+                "payload": {"conclusion": conclusion.dict()},
+            },
+        )
 
         return conclusion, transcript, ui_commands, memory_updates
 
-    async def _run_prevotes(self, seats: list[SeatConfig], user_input: str) -> list:
+    async def _run_prevotes(
+        self, seats: list[SeatConfig], user_input: str, session_id: str = None
+    ) -> list:
         """Run pre-votes for all seats in parallel."""
         from ..models.seat import SeatPrevote
 
@@ -320,7 +543,24 @@ class CouncilOrchestrator:
 
         async def limited_prevote(seat: SeatConfig) -> SeatPrevote:
             async with semaphore:
-                return await prevote_seat(seat)
+                result = await prevote_seat(seat)
+                # Send individual seat prevote event if session_id provided
+                if session_id:
+                    await websocket_manager.send_to_session(
+                        session_id,
+                        {
+                            "type": "seat_prevote",
+                            "payload": {
+                                "seat_id": seat.seat_id,
+                                "seat_name": seat.name,
+                                "stance": (
+                                    result.stance.value if result.stance else "abstain"
+                                ),
+                                "confidence": result.confidence,
+                            },
+                        },
+                    )
+                return result
 
         tasks = [limited_prevote(seat) for seat in seats]
         results = await asyncio.gather(*tasks, return_exceptions=True)

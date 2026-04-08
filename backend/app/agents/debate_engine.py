@@ -7,6 +7,7 @@ from ..core.llm import LLMClient
 from ..models.seat import SeatConfig, SeatState, SeatStance, SeatAction
 from ..models.council import DebateTranscript, VoteMap
 from ..services.bell_engine import BellEngine
+from ..services.websocket_manager import websocket_manager
 from .seat_agent import SeatAgent
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,7 @@ class DebateEngine:
         seat_states: dict[str, SeatState],
         rounds: int,
         proposal: str,
+        session_id: str = None,
     ) -> tuple[DebateTranscript, VoteMap]:
         """Run multi-round debate and return transcript + vote map."""
         transcript = DebateTranscript()
@@ -32,6 +34,16 @@ class DebateEngine:
 
         for round_num in range(1, rounds + 1):
             logger.info(f"Starting debate round {round_num}")
+
+            # Send round start event
+            if session_id:
+                await websocket_manager.send_to_session(
+                    session_id,
+                    {
+                        "type": "round_started",
+                        "payload": {"round": round_num, "total_rounds": rounds},
+                    },
+                )
 
             # Determine speaking order
             speaking_order = self._determine_speaking_order(
@@ -73,6 +85,22 @@ class DebateEngine:
                         0, min(100, seat_state.bell_health - bell_event // 2)
                     )
 
+                    # Send bell update event
+                    if session_id:
+                        await websocket_manager.send_to_session(
+                            session_id,
+                            {
+                                "type": "bell_update",
+                                "payload": {
+                                    "seat_id": seat_id,
+                                    "seat_name": seat_config.name,
+                                    "stress": seat_state.stress,
+                                    "bell_health": seat_state.bell_health,
+                                    "fracture_risk": seat_state.fracture_risk,
+                                },
+                            },
+                        )
+
                 # Record speech
                 speech_record = {
                     "seat_id": seat_id,
@@ -87,6 +115,23 @@ class DebateEngine:
                     f"{seat_config.name} ({action.intent.value}): {action.speech[:50]}..."
                 )
 
+                # Send seat speaking event
+                if session_id:
+                    await websocket_manager.send_to_session(
+                        session_id,
+                        {
+                            "type": "seat_speaking",
+                            "payload": {
+                                "seat_id": seat_id,
+                                "seat_name": seat_config.name,
+                                "speech": action.speech,
+                                "stance": action.intent.value,
+                                "confidence": action.confidence,
+                                "round": round_num,
+                            },
+                        },
+                    )
+
             # Add round to transcript
             transcript.rounds.append(
                 {
@@ -95,6 +140,19 @@ class DebateEngine:
                 }
             )
             transcript.total_speeches += len(round_speeches)
+
+            # Send round complete event
+            if session_id:
+                await websocket_manager.send_to_session(
+                    session_id,
+                    {
+                        "type": "round_completed",
+                        "payload": {
+                            "round": round_num,
+                            "speeches_in_round": len(round_speeches),
+                        },
+                    },
+                )
 
         # Tally final votes
         vote_map = self._tally_votes(seat_states, visible_seat_configs)
