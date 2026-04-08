@@ -131,4 +131,34 @@ class CouncilResponse(BaseModel):
     council_state: CouncilState
     ui_commands: list[UICommand] = Field(default_factory=list)
     memory_updates: list[MemoryWrite] = Field(default_factory=list)
+    token_usage: Optional["TokenUsage"] = None
+    reconsideration: Optional["ReconsiderationResult"] = None
     created_at: datetime = Field(default_factory=datetime.now)
+
+
+class TokenUsage(BaseModel):
+    """Token usage tracking for LLM calls."""
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    estimated_cost: float = 0.0  # Based on model pricing
+
+    def add(self, other: "TokenUsage"):
+        """Add another TokenUsage to this one."""
+        self.input_tokens += other.input_tokens
+        self.output_tokens += other.output_tokens
+        self.total_tokens += other.total_tokens
+        self.estimated_cost += other.estimated_cost
+        return self
+
+
+class ReconsiderationResult(BaseModel):
+    """Result of reconsideration request."""
+
+    triggered: bool = False
+    reason: str = ""
+    original_vote: VoteMap = Field(default_factory=VoteMap)
+    new_vote: VoteMap = Field(default_factory=VoteMap)
+    changed_seats: list[str] = Field(default_factory=list)  # Seats that changed stance
+    conclusion_updated: bool = False

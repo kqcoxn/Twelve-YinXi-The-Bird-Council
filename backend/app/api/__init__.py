@@ -11,6 +11,9 @@ from ..models.api import (
     SeatStateResponse,
     SessionStateResponse,
     UserProfileResponse,
+    ReconsiderRequest,
+    AskSeatRequest,
+    SupplementTestimonyRequest,
 )
 from ..models.council import (
     CouncilResponse,
@@ -295,3 +298,70 @@ async def council_websocket(websocket: WebSocket, session_id: str):
         logger.error(f"WebSocket error for session {session_id}: {e}")
     finally:
         websocket_manager.disconnect(websocket)
+
+
+@router.post("/council/reconsider")
+async def request_reconsider(request: ReconsiderRequest):
+    """Request reconsideration of a council decision."""
+    try:
+        orchestrator = get_orchestrator()
+        result = await orchestrator.request_reconsideration(
+            session_id=request.session_id,
+            user_id=request.user_id,
+            reason=request.reason,
+        )
+        return result
+    except Exception as e:
+        logger.error(f"Failed to process reconsideration: {e}", exc_info=True)
+        return {"error": str(e)}
+
+
+@router.post("/council/ask-seat")
+async def ask_seat(request: AskSeatRequest):
+    """Ask a specific seat a question."""
+    try:
+        orchestrator = get_orchestrator()
+        result = await orchestrator.ask_seat_question(
+            session_id=request.session_id,
+            user_id=request.user_id,
+            seat_id=request.seat_id,
+            question=request.question,
+        )
+        return result
+    except Exception as e:
+        logger.error(f"Failed to process seat question: {e}", exc_info=True)
+        return {"error": str(e)}
+
+
+@router.post("/council/supplement")
+async def supplement_testimony(request: SupplementTestimonyRequest):
+    """Supplement testimony during an ongoing council session."""
+    try:
+        orchestrator = get_orchestrator()
+        result = await orchestrator.supplement_testimony(
+            session_id=request.session_id,
+            user_id=request.user_id,
+            testimony=request.testimony,
+        )
+        return result
+    except Exception as e:
+        logger.error(f"Failed to process supplement testimony: {e}", exc_info=True)
+        return {"error": str(e)}
+
+
+@router.get("/council/relationship-graph")
+async def get_relationship_graph():
+    """Get relationship graph between seats."""
+    try:
+        from ..services.relationship_engine import RelationshipEngine
+        from ..services.memory_service import memory_service
+        from ..models.personas import load_all_seats
+
+        engine = RelationshipEngine(memory_service)
+        all_seats = load_all_seats()
+        graph = await engine.calculate_graph(all_seats)
+
+        return graph.to_dict()
+    except Exception as e:
+        logger.error(f"Failed to get relationship graph: {e}", exc_info=True)
+        return {"error": str(e)}

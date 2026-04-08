@@ -109,6 +109,29 @@ export interface SeatPrevote {
   risk_assessment: string;
 }
 
+export interface TokenUsage {
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  estimated_cost: number;
+}
+
+export interface ReconsiderationResult {
+  triggered: boolean;
+  reason: string;
+  original_vote: { approve: number; oppose: number; abstain: number };
+  new_vote: { approve: number; oppose: number; abstain: number };
+  changed_seats: string[];
+  conclusion_updated: boolean;
+}
+
+export interface SeatInquiryResult {
+  seat_id: string;
+  seat_name: string;
+  question: string;
+  response: string;
+}
+
 // Extended CouncilResponse with transcript
 export interface FullCouncilResponse extends CouncilResponse {
   transcript?: DebateTranscript;
@@ -117,4 +140,6 @@ export interface FullCouncilResponse extends CouncilResponse {
     practical?: string;
     psychological?: string;
   };
+  token_usage?: TokenUsage;
+  reconsideration?: ReconsiderationResult;
 }

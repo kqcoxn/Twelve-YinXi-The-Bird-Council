@@ -19,6 +19,7 @@ from ..models.council import (
     CouncilResponse,
     UICommand,
     MemoryWrite,
+    TokenUsage,
 )
 from ..models.seat import SeatConfig, SeatState, SeatStance
 from ..models.api import SubmitProposalRequest
@@ -87,6 +88,7 @@ class CouncilOrchestrator:
         memory_updates: list[MemoryWrite] = []
         transcript: DebateTranscript | None = None
         conclusion: CouncilConclusion | None = None
+        total_token_usage = TokenUsage()
 
         try:
             # Send start event
@@ -224,9 +226,10 @@ class CouncilOrchestrator:
                         "payload": {"mode": "light_chat", "message": "快速响应模式"},
                     },
                 )
-                conclusion = await self._generate_light_response(
+                conclusion, tokens = await self._generate_light_response(
                     user_input, perception, memory_context
                 )
+                total_token_usage.add(tokens)
             elif flow_plan.mode == "safety_mode":
                 conclusion = CouncilConclusion(
                     summary="检测到潜在风险，请优先关注情绪状态。",
@@ -246,11 +249,12 @@ class CouncilOrchestrator:
                         "payload": {"mode": "full_council", "message": "完整议会模式"},
                     },
                 )
-                conclusion, transcript, ui_commands, memory_updates = (
+                conclusion, transcript, ui_commands, memory_updates, council_tokens = (
                     await self._run_full_council(
                         session_id, user_input, perception, flow_plan, council_state
                     )
                 )
+                total_token_usage.add(council_tokens)
 
             # Step: RENDER (multi-view)
             council_state.orchestrator_state = OrchestratorState.RENDERING
@@ -335,6 +339,7 @@ class CouncilOrchestrator:
             council_state=council_state,
             ui_commands=ui_commands,
             memory_updates=memory_updates,
+            token_usage=total_token_usage,
         )
 
     async def _run_full_council(
@@ -344,10 +349,17 @@ class CouncilOrchestrator:
         perception: PerceptionResult,
         flow_plan: FlowPlan,
         council_state: CouncilState,
-    ) -> tuple[CouncilConclusion, DebateTranscript, list[UICommand], list[MemoryWrite]]:
-        """Run the full 23→12 council deliberation."""
+    ) -> tuple[
+        CouncilConclusion,
+        DebateTranscript,
+        list[UICommand],
+        list[MemoryWrite],
+        TokenUsage,
+    ]:
+        """Run the full 23→12 council deliberation. Returns (conclusion, transcript, ui_commands, memory_updates, token_usage)."""
         ui_commands: list[UICommand] = []
         memory_updates: list[MemoryWrite] = []
+        total_token_usage = TokenUsage()
 
         # Step 4: PREVOTE_23
         council_state.orchestrator_state = OrchestratorState.PREVOTING_23
@@ -517,7 +529,10 @@ class CouncilOrchestrator:
             },
         )
 
-        conclusion = await self._generate_conclusion(user_input, transcript, vote_map)
+        conclusion, tokens = await self._generate_conclusion(
+            user_input, transcript, vote_map
+        )
+        total_token_usage.add(tokens)
 
         await websocket_manager.send_to_session(
             session_id,
@@ -527,7 +542,7 @@ class CouncilOrchestrator:
             },
         )
 
-        return conclusion, transcript, ui_commands, memory_updates
+        return conclusion, transcript, ui_commands, memory_updates, total_token_usage
 
     async def _run_prevotes(
         self, seats: list[SeatConfig], user_input: str, session_id: str = None
@@ -581,8 +596,9 @@ class CouncilOrchestrator:
         proposal: str,
         transcript: DebateTranscript,
         vote_map: VoteMap,
-    ) -> CouncilConclusion:
-        """Generate conclusion from debate transcript."""
+    ) -> tuple[CouncilConclusion, TokenUsage]:
+        """Generate conclusion from debate transcript. Returns (conclusion, token_usage)."""
+        token_usage = TokenUsage()
         try:
             # Build transcript summary
             transcript_text = self._format_transcript(transcript)
@@ -596,11 +612,12 @@ class CouncilOrchestrator:
                 abstain_count=vote_map.abstain,
             )
 
-            response = await self.llm.call_strong(
+            response, tokens = await self.llm.call_strong(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 temperature=0.5,
             )
+            token_usage.add(tokens)
 
             # Parse JSON response
             json_str = self._extract_json(response)
@@ -608,27 +625,33 @@ class CouncilOrchestrator:
                 import json
 
                 data = json.loads(json_str)
-                return CouncilConclusion(
-                    summary=data.get("summary", ""),
-                    decision=data.get("decision", "conditional"),
-                    main_reasons=data.get("main_reasons", []),
-                    risks=data.get("risks", []),
-                    next_steps=data.get("next_steps", []),
-                    minority_opinion=data.get("minority_opinion", ""),
-                    vote_result=vote_map,
+                return (
+                    CouncilConclusion(
+                        summary=data.get("summary", ""),
+                        decision=data.get("decision", "conditional"),
+                        main_reasons=data.get("main_reasons", []),
+                        risks=data.get("risks", []),
+                        next_steps=data.get("next_steps", []),
+                        minority_opinion=data.get("minority_opinion", ""),
+                        vote_result=vote_map,
+                    ),
+                    token_usage,
                 )
         except Exception as e:
             logger.warning(f"Conclusion generation failed: {e}")
 
         # Fallback conclusion
-        return CouncilConclusion(
-            summary="议会已就议题进行了讨论。",
-            decision="conditional",
-            main_reasons=["综合各方意见"],
-            risks=["存在不同观点"],
-            next_steps=["建议综合考虑多方意见"],
-            minority_opinion="少数席位持保留意见",
-            vote_result=vote_map,
+        return (
+            CouncilConclusion(
+                summary="议会已就议题进行了讨论。",
+                decision="conditional",
+                main_reasons=["综合各方意见"],
+                risks=["存在不同观点"],
+                next_steps=["建议综合考虑多方意见"],
+                minority_opinion="少数席位持保留意见",
+                vote_result=vote_map,
+            ),
+            token_usage,
         )
 
     async def _generate_light_response(
@@ -636,8 +659,9 @@ class CouncilOrchestrator:
         user_input: str,
         perception: PerceptionResult,
         memory_context: dict,
-    ) -> CouncilConclusion:
-        """Generate a light chat response."""
+    ) -> tuple[CouncilConclusion, TokenUsage]:
+        """Generate a light chat response. Returns (conclusion, token_usage)."""
+        token_usage = TokenUsage()
         try:
             context = f"用户议题：{user_input}\n\n感知结果：{perception.task_type}"
             if memory_context.get("similar_cases"):
@@ -645,29 +669,36 @@ class CouncilOrchestrator:
                     f"\n\n历史案例：{len(memory_context['similar_cases'])} 个相关案例"
                 )
 
-            response = await self.llm.call_fast(
+            response, tokens = await self.llm.call_fast(
                 system_prompt="你是一个群鸟议会的主持人。请简洁地回应用户的议题，200字以内。",
                 user_prompt=context,
                 temperature=0.7,
             )
+            token_usage.add(tokens)
 
-            return CouncilConclusion(
-                summary=response.strip(),
-                decision="conditional",
-                main_reasons=[],
-                risks=[],
-                next_steps=[],
-                minority_opinion="",
+            return (
+                CouncilConclusion(
+                    summary=response.strip(),
+                    decision="conditional",
+                    main_reasons=[],
+                    risks=[],
+                    next_steps=[],
+                    minority_opinion="",
+                ),
+                token_usage,
             )
         except Exception as e:
             logger.warning(f"Light response failed: {e}")
-            return CouncilConclusion(
-                summary="议会收到了你的议题。",
-                decision="conditional",
-                main_reasons=[],
-                risks=[],
-                next_steps=[],
-                minority_opinion="",
+            return (
+                CouncilConclusion(
+                    summary="议会收到了你的议题。",
+                    decision="conditional",
+                    main_reasons=[],
+                    risks=[],
+                    next_steps=[],
+                    minority_opinion="",
+                ),
+                token_usage,
             )
 
     async def _archive_case(
@@ -714,3 +745,142 @@ class CouncilOrchestrator:
         if start != -1 and end != -1:
             return text[start : end + 1]
         return ""
+
+    async def request_reconsideration(
+        self,
+        session_id: str,
+        user_id: str,
+        reason: str,
+    ) -> dict:
+        """Request reconsideration of a council decision."""
+        logger.info(f"Reconsideration requested for session {session_id}: {reason}")
+
+        # Get the existing session data
+        session = await self.memory.get_session(session_id)
+        if not session:
+            return {"error": "Session not found"}
+
+        # Check if there's a previous conclusion to reconsider
+        if not session.conclusion:
+            return {"error": "No conclusion to reconsider"}
+
+        # Trigger reconsideration state
+        await self.memory.update_session(
+            session_id,
+            {
+                "triggered_reconsider": True,
+                "reconsider_reason": reason,
+            },
+        )
+
+        # Send WebSocket event
+        await websocket_manager.send_to_session(
+            session_id,
+            {
+                "type": "reconsideration_started",
+                "payload": {
+                    "reason": reason,
+                    "timestamp": datetime.now().isoformat(),
+                },
+            },
+        )
+
+        return {
+            "session_id": session_id,
+            "triggered": True,
+            "reason": reason,
+            "message": "复议已触发，议会正在重新审议",
+        }
+
+    async def ask_seat_question(
+        self,
+        session_id: str,
+        user_id: str,
+        seat_id: str,
+        question: str,
+    ) -> dict:
+        """Ask a specific seat a question."""
+        logger.info(f"Ask seat {seat_id} question: {question[:50]}...")
+
+        # Find the seat config
+        seat_config = None
+        for seat in self.all_seats:
+            if seat.seat_id == seat_id:
+                seat_config = seat
+                break
+
+        if not seat_config:
+            return {"error": f"Seat {seat_id} not found"}
+
+        # Generate response from the seat
+        try:
+            response = await self.seat_agent.generate_response(
+                seat_config, question, context="用户提问"
+            )
+
+            # Send WebSocket event
+            await websocket_manager.send_to_session(
+                session_id,
+                {
+                    "type": "seat_response",
+                    "payload": {
+                        "seat_id": seat_id,
+                        "seat_name": seat_config.name,
+                        "question": question,
+                        "response": response,
+                        "timestamp": datetime.now().isoformat(),
+                    },
+                },
+            )
+
+            return {
+                "seat_id": seat_id,
+                "seat_name": seat_config.name,
+                "question": question,
+                "response": response,
+            }
+        except Exception as e:
+            logger.error(f"Failed to get seat response: {e}")
+            return {"error": str(e)}
+
+    async def supplement_testimony(
+        self,
+        session_id: str,
+        user_id: str,
+        testimony: str,
+    ) -> dict:
+        """Supplement testimony during an ongoing council session."""
+        logger.info(
+            f"Supplement testimony for session {session_id}: {testimony[:50]}..."
+        )
+
+        # Get the session
+        session = await self.memory.get_session(session_id)
+        if not session:
+            return {"error": "Session not found"}
+
+        # Add testimony to session memory
+        await self.memory.update_session(
+            session_id,
+            {
+                "supplement_testimonies": session.supplement_testimonies + [testimony],
+            },
+        )
+
+        # Send WebSocket event
+        await websocket_manager.send_to_session(
+            session_id,
+            {
+                "type": "testimony_supplemented",
+                "payload": {
+                    "testimony": testimony,
+                    "timestamp": datetime.now().isoformat(),
+                },
+            },
+        )
+
+        return {
+            "session_id": session_id,
+            "supplemented": True,
+            "message": "证词已补充到议会记录",
+        }

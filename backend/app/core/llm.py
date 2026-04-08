@@ -5,6 +5,30 @@ from litellm import acompletion
 from ..core.config import settings
 
 
+class TokenUsage:
+    """Track token usage for LLM calls."""
+
+    def __init__(self):
+        self.input_tokens: int = 0
+        self.output_tokens: int = 0
+        self.total_tokens: int = 0
+
+    def add_from_response(self, usage) -> None:
+        """Add token usage from LLM response."""
+        if usage:
+            self.input_tokens += getattr(usage, "prompt_tokens", 0)
+            self.output_tokens += getattr(usage, "completion_tokens", 0)
+            self.total_tokens += getattr(usage, "total_tokens", 0)
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary."""
+        return {
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "total_tokens": self.total_tokens,
+        }
+
+
 class LLMClient:
     """LLM client with retry logic and mock mode support."""
 
@@ -30,10 +54,11 @@ class LLMClient:
         user_prompt: str,
         temperature: float = 0.7,
         max_tokens: int = 1000,
-    ) -> str:
-        """Call fast model."""
+    ) -> tuple[str, TokenUsage]:
+        """Call fast model. Returns (text, token_usage)."""
         if self.is_mock:
-            return await self._mock_generate(user_prompt, system_prompt)
+            text = await self._mock_generate(user_prompt, system_prompt)
+            return text, TokenUsage()
 
         return await self._generate(
             system_prompt=system_prompt,
@@ -49,10 +74,11 @@ class LLMClient:
         user_prompt: str,
         temperature: float = 0.7,
         max_tokens: int = 2000,
-    ) -> str:
-        """Call strong model."""
+    ) -> tuple[str, TokenUsage]:
+        """Call strong model. Returns (text, token_usage)."""
         if self.is_mock:
-            return await self._mock_generate(user_prompt, system_prompt)
+            text = await self._mock_generate(user_prompt, system_prompt)
+            return text, TokenUsage()
 
         return await self._generate(
             system_prompt=system_prompt,
@@ -116,8 +142,8 @@ class LLMClient:
         max_tokens: int,
         model: str,
         max_retries: int = 3,
-    ) -> str:
-        """Generate text with retry logic."""
+    ) -> tuple[str, TokenUsage]:
+        """Generate text with retry logic. Returns (text, token_usage)."""
         for attempt in range(max_retries):
             try:
                 messages = [
@@ -134,7 +160,9 @@ class LLMClient:
                     max_tokens=max_tokens,
                 )
 
-                return response.choices[0].message.content
+                usage = TokenUsage()
+                usage.add_from_response(getattr(response, "usage", None))
+                return response.choices[0].message.content, usage
 
             except Exception as e:
                 if attempt == max_retries - 1:

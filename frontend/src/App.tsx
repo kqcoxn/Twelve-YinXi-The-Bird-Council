@@ -40,9 +40,11 @@ export default function App() {
         </nav>
       </header>
 
-      <aside className="sidebar">
-        <InputPanel />
-      </aside>
+      {viewMode === "input" && (
+        <aside className="sidebar">
+          <InputPanel />
+        </aside>
+      )}
 
       <main className="main-content">
         {viewMode === "input" && <CouncilHall />}

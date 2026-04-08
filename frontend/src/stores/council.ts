@@ -7,6 +7,9 @@ import type {
   DebateTranscript,
   FullCouncilResponse,
   SpeechRecord,
+  TokenUsage,
+  ReconsiderationResult,
+  SeatInquiryResult,
 } from "../types";
 import * as api from "../api/client";
 import { councilWebSocketClient, WebSocketEvent } from "../api/websocket";
@@ -28,6 +31,9 @@ interface CouncilStore {
   liveEvents: Array<{ type: string; timestamp: string; data: any }>;
   currentRound: number;
   totalRounds: number;
+  tokenUsage: TokenUsage | null;
+  reconsideration: ReconsiderationResult | null;
+  currentSessionId: string | null;
 
   submitProposal: (proposal: string, category?: string) => Promise<void>;
   fetchSession: (sessionId: string) => Promise<void>;
@@ -37,6 +43,12 @@ interface CouncilStore {
   connectWebSocket: (sessionId: string) => Promise<void>;
   disconnectWebSocket: () => void;
   addLiveSpeech: (speech: SpeechRecord) => void;
+  requestReconsider: (reason: string) => Promise<void>;
+  askSeatQuestion: (
+    seatId: string,
+    question: string,
+  ) => Promise<SeatInquiryResult | null>;
+  supplementTestimony: (testimony: string) => Promise<void>;
 }
 
 export const useCouncilStore = create<CouncilStore>((set, get) => ({
@@ -52,6 +64,9 @@ export const useCouncilStore = create<CouncilStore>((set, get) => ({
   liveEvents: [],
   currentRound: 0,
   totalRounds: 0,
+  tokenUsage: null,
+  reconsideration: null,
+  currentSessionId: null,
 
   submitProposal: async (proposal: string, category?: string) => {
     set({ isLoading: true, error: null, loadingStep: "提交议题..." });
@@ -196,6 +211,7 @@ export const useCouncilStore = create<CouncilStore>((set, get) => ({
           let newTranscript = state.transcript || {
             rounds: [],
             total_speeches: 0,
+            created_at: new Date().toISOString(),
           };
 
           // Find or create the round
@@ -204,10 +220,11 @@ export const useCouncilStore = create<CouncilStore>((set, get) => ({
           );
 
           if (roundIndex === -1) {
-            newTranscript.rounds.push({
+            const newRound: { round_num: number; speeches: SpeechRecord[] } = {
               round_num: speechData.round,
               speeches: [],
-            });
+            };
+            newTranscript.rounds.push(newRound);
             roundIndex = newTranscript.rounds.length - 1;
           }
 
@@ -304,5 +321,79 @@ export const useCouncilStore = create<CouncilStore>((set, get) => ({
 
   addLiveSpeech: (speech: SpeechRecord) => {
     // This is now handled by WebSocket events
+  },
+
+  requestReconsider: async (reason: string) => {
+    const sessionId = get().currentSessionId;
+    if (!sessionId) {
+      set({ error: "没有当前会话可以复议" });
+      return;
+    }
+
+    set({ isLoading: true, loadingStep: "触发复议..." });
+    try {
+      const result = await api.requestReconsider(sessionId, reason);
+      set({
+        isLoading: false,
+        loadingStep: "",
+        reconsideration: {
+          triggered: result.triggered,
+          reason: result.reason,
+          original_vote: { approve: 0, oppose: 0, abstain: 0 },
+          new_vote: { approve: 0, oppose: 0, abstain: 0 },
+          changed_seats: [],
+          conclusion_updated: false,
+        },
+      });
+    } catch (err) {
+      set({
+        error: err instanceof Error ? err.message : "复议失败",
+        isLoading: false,
+        loadingStep: "",
+      });
+    }
+  },
+
+  askSeatQuestion: async (seatId: string, question: string) => {
+    const sessionId = get().currentSessionId;
+    if (!sessionId) {
+      set({ error: "没有当前会话" });
+      return null;
+    }
+
+    try {
+      const result = await api.askSeatQuestion(sessionId, seatId, question);
+      return {
+        seat_id: result.seat_id,
+        seat_name: result.seat_name,
+        question: result.question,
+        response: result.response,
+      };
+    } catch (err) {
+      set({
+        error: err instanceof Error ? err.message : "提问失败",
+      });
+      return null;
+    }
+  },
+
+  supplementTestimony: async (testimony: string) => {
+    const sessionId = get().currentSessionId;
+    if (!sessionId) {
+      set({ error: "没有当前会话" });
+      return;
+    }
+
+    set({ isLoading: true, loadingStep: "补充证词..." });
+    try {
+      await api.supplementTestimony(sessionId, testimony);
+      set({ isLoading: false, loadingStep: "" });
+    } catch (err) {
+      set({
+        error: err instanceof Error ? err.message : "补充证词失败",
+        isLoading: false,
+        loadingStep: "",
+      });
+    }
   },
 }));

@@ -103,3 +103,86 @@ export async function getCouncilHistory(
   if (!response.ok) throw new Error(`API error: ${response.status}`);
   return response.json();
 }
+
+export async function requestReconsider(
+  sessionId: string,
+  reason: string,
+): Promise<{
+  session_id: string;
+  triggered: boolean;
+  reason: string;
+  message: string;
+}> {
+  const response = await fetch(`${API_BASE}/council/reconsider`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      user_id: "default_user",
+      session_id: sessionId,
+      reason,
+    }),
+  });
+  if (!response.ok) throw new Error(`API error: ${response.status}`);
+  return response.json();
+}
+
+export async function askSeatQuestion(
+  sessionId: string,
+  seatId: string,
+  question: string,
+): Promise<{
+  seat_id: string;
+  seat_name: string;
+  question: string;
+  response: string;
+}> {
+  const response = await fetch(`${API_BASE}/council/ask-seat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      user_id: "default_user",
+      session_id: sessionId,
+      seat_id: seatId,
+      question,
+    }),
+  });
+  if (!response.ok) throw new Error(`API error: ${response.status}`);
+  return response.json();
+}
+
+export async function supplementTestimony(
+  sessionId: string,
+  testimony: string,
+): Promise<{ session_id: string; supplemented: boolean; message: string }> {
+  const response = await fetch(`${API_BASE}/council/supplement`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      user_id: "default_user",
+      session_id: sessionId,
+      testimony,
+    }),
+  });
+  if (!response.ok) throw new Error(`API error: ${response.status}`);
+  return response.json();
+}
+
+export interface RelationshipGraphData {
+  edges: Array<{
+    from_seat_id: string;
+    to_seat_id: string;
+    agreement_score: number;
+    interaction_count: number;
+    last_interaction: string | null;
+    influence_strength: number;
+  }>;
+  clustering_coefficient: number;
+  density: number;
+  updated_at: string | null;
+}
+
+export async function getRelationshipGraph(): Promise<RelationshipGraphData> {
+  const response = await fetch(`${API_BASE}/council/relationship-graph`);
+  if (!response.ok) throw new Error(`API error: ${response.status}`);
+  return response.json();
+}
